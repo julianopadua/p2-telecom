@@ -10,6 +10,8 @@ import PAClib::*;
 import SingleElemVector::*;
 import E1Unframer::*;
 
+typedef Bit#(5) Timeslot;
+
 (* synthesize *)
 module mkTestE1(Empty);
     let unfr <- mkE1Unframer;
