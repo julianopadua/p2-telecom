@@ -106,20 +106,25 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
                     2'b01: P;
                     2'b10: N;
                 endcase;
-                fifo_rx_w.wset(value);
+                fifo_rx_w.set(value);
             end
 
             counter <= counter == 0 ? counter_reset_value : counter - 1;
 
-            if (sync_to_line_clock) begin
+            if (sync_to_line_clock && counter == counter_reset_value >> 2) begin
                 let positive_edge = rxp_sync[1:0] == 'b01 || rxn_sync[1:0] == 'b01;  // {current_bit, previous_bit}
-                // TODO: preencha aqui com a sua lógica
+                if (positive_edge) begin
+                    // Ajusta o valor de counter_reset_value baseado na condição de borda detectada
+                    if (counter < counter_max_value / 4) begin
+                        counter_reset_value <= counter_reset_value + 1;
+                    end else if (counter > counter_max_value / 4) begin
+                        counter_reset_value <= counter_reset_value - 1;
+                    end
+                end
             end
         endmethod
 
         method dbg1 = isValid(fifo_rx_w.wget);
-        //method dbg2 = fifo_rx.notFull;
-        //method dbg2 = !first_output_produced || fifo_tx.notEmpty;
     endinterface
 
     interface out = toGet(fifo_rx);
