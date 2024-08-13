@@ -6,8 +6,8 @@ import Assert::*;
 
 typedef 32 CyclesPerSymbol;
 
-// Definindo LBit caso não esteja definido
-typedef Bit#(32) LBit#(numeric type n) = Bit#(n);
+// Definindo LBit como um alias para Bit
+typedef Bit#(CyclesPerSymbol) LBit#(numeric type n);
 
 // Definindo Symbol caso não esteja definido
 typedef enum { N, Z, P } Symbol deriving (Eq, Bits, FShow);
