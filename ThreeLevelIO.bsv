@@ -24,8 +24,6 @@ interface ThreeLevelIOPins;
 
     (* always_ready *)
     method Bool dbg1;
-    //(* always_ready *)
-    //method Bool dbg2;
 endinterface
 
 module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
@@ -40,13 +38,13 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
     TriState#(Bit#(1)) txn_zbuf <- mkTriState(tx_en, txn_in);
 
     FIFOF#(Symbol) fifo_tx <- mkFIFOF;
-
     Reg#(Bool) first_output_produced <- mkReg(False);
     continuousAssert (!first_output_produced || fifo_tx.notEmpty, "E1 TX was not fed fast enough");
 
     rule produce_output;
         let level = fifo_tx.first;
         let counter_mid_value = counter_max_value >> 1;
+
         if (counter < counter_mid_value) begin
             level = Z;
         end
@@ -71,8 +69,9 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
 
         if (counter == 0) begin
             fifo_tx.deq;
-            first_output_produced <= True;
         end
+
+        first_output_produced <= True;
         counter <= (counter == 0) ? counter_reset_value : counter - 1;
     endrule
 
@@ -97,7 +96,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
             rxp_sync <= {rxp_n, rxp_sync[2:1]};
             rxn_sync <= {rxn_n, rxn_sync[2:1]};
 
-            let sample_at_counter = sync_to_line_clock ? 0 : counter_max_value >> 2;
+            let sample_at_counter = sync_to_line_clock ? 0 : (counter_reset_value >> 2);
             if (counter == sample_at_counter) begin
                 let value = case ({rxp_sync[1], rxn_sync[1]})
                     2'b00: Z;
@@ -108,16 +107,16 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
                 fifo_rx_w <= value;
             end
 
+            counter <= (counter == 0) ? counter_reset_value : counter - 1;
+
             if (sync_to_line_clock && (rxp_sync[1:0] == 'b01 || rxn_sync[1:0] == 'b01)) begin
-                // Adjust the counter_reset_value based on phase detection
+                // Adjust counter_reset_value based on edge detection
                 if (counter < (counter_reset_value >> 2)) begin
                     counter_reset_value <= counter_reset_value + 1;
                 end else if (counter > (counter_reset_value >> 2)) begin
                     counter_reset_value <= counter_reset_value - 1;
                 end
             end
-
-            counter <= (counter == 0) ? counter_reset_value : counter - 1;
         endmethod
 
         method Bool dbg1 = isValid(fifo_rx_w.wget);
