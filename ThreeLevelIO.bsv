@@ -77,14 +77,14 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
 
     Reg#(Bit#(3)) rxp_sync <- mkReg('b111);
     Reg#(Bit#(3)) rxn_sync <- mkReg('b111);
-    RWire#(Symbol) fifo_rx_w <- mkRWire;
+    RWire#(Maybe#(Symbol)) fifo_rx_w <- mkRWire;
     FIFOF#(Symbol) fifo_rx <- mkFIFOF;
 
     continuousAssert(!isValid(fifo_rx_w.wget) || fifo_rx.notFull, "E1 RX was not consumed fast enough");
 
     rule fifo_rx_enq;
         if (isValid(fifo_rx_w.wget)) begin
-            let value = fifo_rx_w.wget;
+            let value = fromMaybe(fifo_rx_w.wget);
             fifo_rx.enq(value);
         end
     endrule
@@ -104,7 +104,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
                     2'b01: P;
                     2'b10: N;
                 endcase;
-                fifo_rx_w <= value;
+                fifo_rx_w.wset(Valid value);
             end
 
             counter <= (counter == 0) ? counter_reset_value : counter - 1;
