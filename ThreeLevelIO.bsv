@@ -4,137 +4,158 @@ import BUtils::*;
 import FIFOF::*;
 import Assert::*;
 
+// Define o número de ciclos por símbolo
 typedef 32 CyclesPerSymbol;
 
-// Definindo LBit como um alias para Bit
-typedef Bit#(CyclesPerSymbol) LBit#(numeric type n);
-
-// Definindo Symbol caso não esteja definido
-typedef enum { N, Z, P } Symbol deriving (Eq, Bits, FShow);
-
-interface ThreeLevelIOPins;
-    (* always_ready *)
-    method Inout#(Bit#(1)) txp;
-    (* always_ready *)
-    method Inout#(Bit#(1)) txn;
-    (* always_ready, always_enabled, prefix="" *)
-    method Action recv(Bit#(1) rxp_n, Bit#(1) rxn_n);
-
-    (* always_ready *)
-    method Bool dbg1;
-    //(* always_ready *)
-    //method Bool dbg2;
-endinterface
-
+// Define a interface de entrada/saída de três níveis
 interface ThreeLevelIO;
     interface ThreeLevelIOPins pins;
     interface Put#(Symbol) in;
     interface Get#(Symbol) out;
 endinterface
 
-module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
-    LBit#(CyclesPerSymbol) counter_max_value = fromInteger(valueOf(CyclesPerSymbol) - 1);
-    Reg#(LBit#(CyclesPerSymbol)) counter_reset_value <- mkReg(counter_max_value);
-    Reg#(LBit#(CyclesPerSymbol)) counter <- mkReg(counter_max_value);
+// Define os símbolos utilizados na comunicação
+typedef enum { N, Z, P } Symbol deriving (Eq, Bits, FShow);
 
-    Reg#(Bit#(1)) txp_in <- mkReg(0);
-    Reg#(Bit#(1)) txn_in <- mkReg(0);
-    Reg#(Bool) tx_en <- mkReg(False);
-    TriState#(Bit#(1)) txp_zbuf <- mkTriState(tx_en, txp_in);
-    TriState#(Bit#(1)) txn_zbuf <- mkTriState(tx_en, txn_in);
+// Define os pinos para a interface de entrada/saída de três níveis
+interface ThreeLevelIOPins;
+    (* always_ready *)
+    method Inout#(Bit#(1)) txp; // Pino de transmissão positivo
+    (* always_ready *)
+    method Inout#(Bit#(1)) txn; // Pino de transmissão negativo
+    (* always_ready, always_enabled, prefix="" *)
+    method Action recv(Bit#(1) rxp_n, Bit#(1) rxn_n); // Método de recepção
 
-    FIFOF#(Symbol) fifo_tx <- mkFIFOF;
+    (* always_ready *)
+    method Bool dbg1; // Sinal de debug
+    //(* always_ready *)
+    //method Bool dbg2;
+endinterface
 
-    Reg#(Bool) first_output_produced <- mkReg(False);
-    continuousAssert (!first_output_produced || fifo_tx.notEmpty, "E1 TX was not fed fast enough");
+// Módulo principal que implementa a interface de entrada/saída de três níveis
+module mkThreeLevelIO#(Bool sync_with_line_clock)(ThreeLevelIO);
+    // Define o valor máximo do contador com base no número de ciclos por símbolo
+    LBit#(CyclesPerSymbol) max_counter_value = fromInteger(valueOf(CyclesPerSymbol) - 1);
+    
+    // Registros para o valor de reset do contador e o contador em si
+    Reg#(LBit#(CyclesPerSymbol)) reset_counter_value <- mkReg(max_counter_value);
+    Reg#(LBit#(CyclesPerSymbol)) cycle_counter <- mkReg(max_counter_value);
 
+    // Registros para os pinos de transmissão e o buffer de três estados
+    Reg#(Bit#(1)) txp_state <- mkReg(0);
+    Reg#(Bit#(1)) txn_state <- mkReg(0);
+    Reg#(Bool) transmission_enable <- mkReg(False);
+    TriState#(Bit#(1)) txp_buffer <- mkTriState(transmission_enable, txp_state);
+    TriState#(Bit#(1)) txn_buffer <- mkTriState(transmission_enable, txn_state);
+
+    // FIFO para transmissão de símbolos
+    FIFOF#(Symbol) symbol_fifo_tx <- mkFIFOF;
+
+    // Registro para indicar se a primeira saída foi produzida
+    Reg#(Bool) is_first_output_produced <- mkReg(False);
+    continuousAssert (!is_first_output_produced || symbol_fifo_tx.notEmpty, "E1 TX não foi alimentado rápido o suficiente");
+
+    // Regra para produzir a saída com base nos símbolos do FIFO
     rule produce_output;
-        let level = fifo_tx.first;
+        let current_level = symbol_fifo_tx.first;
 
-        let counter_mid_value = counter_max_value >> 1;
-        if (counter < counter_mid_value)  // Return-to-zero
-            level = Z;
+        let mid_counter_value = max_counter_value >> 1;
+        if (cycle_counter < mid_counter_value)  // Retornar para zero
+            current_level = Z;
 
-        case (level)
+        // Ajusta os sinais de transmissão com base no símbolo atual
+        case (current_level)
             N:
                 action
-                    txp_in <= 0;
-                    txn_in <= 1;
-                    tx_en <= True;
+                    txp_state <= 0;
+                    txn_state <= 1;
+                    transmission_enable <= True;
                 endaction
             Z:
                 action
-                    txp_in <= 0;
-                    txn_in <= 0;
-                    tx_en <= False;
+                    txp_state <= 0;
+                    txn_state <= 0;
+                    transmission_enable <= False;
                 endaction
             P:
                 action
-                    txp_in <= 1;
-                    txn_in <= 0;
-                    tx_en <= True;
+                    txp_state <= 1;
+                    txn_state <= 0;
+                    transmission_enable <= True;
                 endaction
         endcase
 
-        if (counter == 0) begin
-            fifo_tx.deq;
+        // Desenfileira o próximo símbolo quando o contador chega a zero
+        if (cycle_counter == 0) begin
+            symbol_fifo_tx.deq;
         end
 
-        first_output_produced <= True;
+        is_first_output_produced <= True;
     endrule
 
-    Reg#(Bit#(3)) rxp_sync <- mkReg('b111);
-    Reg#(Bit#(3)) rxn_sync <- mkReg('b111);
-    RWire#(Symbol) fifo_rx_w <- mkRWire;
-    FIFOF#(Symbol) fifo_rx <- mkFIFOF;
+    // Registros para sincronização dos sinais de recepção
+    Reg#(Bit#(3)) rxp_sync_reg <- mkReg('b111);
+    Reg#(Bit#(3)) rxn_sync_reg <- mkReg('b111);
+    RWire#(Symbol) fifo_rx_wire <- mkRWire;
+    FIFOF#(Symbol) symbol_fifo_rx <- mkFIFOF;
 
-    continuousAssert(!isValid(fifo_rx_w.wget) || fifo_rx.notFull, "E1 RX was not consumed fast enough");
+    continuousAssert(!isValid(fifo_rx_wire.wget) || symbol_fifo_rx.notFull, "E1 RX não foi consumido rápido o suficiente");
 
-    rule fifo_rx_enq (fifo_rx_w.wget matches tagged Valid .value);
-        fifo_rx.enq(value);
+    // Regra para enfileirar símbolos recebidos no FIFO
+    rule fifo_rx_enqueue (fifo_rx_wire.wget matches tagged Valid .value);
+        symbol_fifo_rx.enq(value);
     endrule
 
+    // Implementação da interface de pinos de entrada/saída de três níveis
     interface ThreeLevelIOPins pins;
-        method txp = txp_zbuf.io;
-        method txn = txn_zbuf.io;
+        method txp = txp_buffer.io; // Atribuição ao buffer do pino de transmissão positivo
+        method txn = txn_buffer.io; // Atribuição ao buffer do pino de transmissão negativo
 
+        // Método de recepção que atualiza os registros de sincronização
         method Action recv(Bit#(1) rxp_n, Bit#(1) rxn_n);
-            rxp_sync <= {rxp_n, rxp_sync[2:1]};
-            rxn_sync <= {rxn_n, rxn_sync[2:1]};
+            rxp_sync_reg <= {rxp_n, rxp_sync_reg[2:1]};
+            rxn_sync_reg <= {rxn_n, rxn_sync_reg[2:1]};
 
-            let sample_at_counter = sync_to_line_clock ? 0 : 17;
-            if (counter == sample_at_counter) begin
-                let value = case ({rxp_sync[1], rxn_sync[1]})
+            // Define o instante para amostrar o sinal de entrada
+            let sample_point = sync_with_line_clock ? 0 : 17;
+            if (cycle_counter == sample_point) begin
+                let value = case ({rxp_sync_reg[1], rxn_sync_reg[1]})
                     2'b00: Z;
                     2'b11: Z;
                     2'b01: P;
                     2'b10: N;
                 endcase;
-                fifo_rx_w.wset(value);
+                fifo_rx_wire.wset(value);
             end
 
-            counter <= counter == 0 ? counter_reset_value : counter - 1;
+            // Atualiza o contador
+            cycle_counter <= cycle_counter == 0 ? reset_counter_value : cycle_counter - 1;
 
-            if (sync_to_line_clock) begin
-                let positive_edge = rxp_sync[1:0] == 'b01 || rxn_sync[1:0] == 'b01;  // {current_bit, previous_bit}
-                if (positive_edge) begin
-                    let expected_counter_value = counter_reset_value >> 2;
-                    if (counter < expected_counter_value) begin
-                        counter_reset_value <= counter_max_value + 1;
-                    end else if (counter > expected_counter_value) begin
-                        counter_reset_value <= counter_max_value - 1;
-                    end else begin
-                        counter_reset_value <= counter_max_value;
+            // Implementa o DPLL para ajuste do contador
+            if (sync_with_line_clock) begin
+                let rising_edge_detected = rxp_sync_reg[1:0] == 'b01 || rxn_sync_reg[1:0] == 'b01;  // {bit_atual, bit_anterior}
+                let optimal_sample_point = reset_counter_value >> 2;
+
+                if (rising_edge_detected) begin 
+                    let new_reset_counter_value = max_counter_value;
+
+                    if (cycle_counter > optimal_sample_point) begin
+                        new_reset_counter_value = max_counter_value - 1; // Ajusta para encurtar o ciclo
                     end
+                    else if (cycle_counter < optimal_sample_point) begin
+                        new_reset_counter_value = max_counter_value + 1; // Ajusta para alongar o ciclo
+                    end
+
+                    reset_counter_value <= new_reset_counter_value;
                 end
             end
         endmethod
 
-        method dbg1 = isValid(fifo_rx_w.wget);
-        //method dbg2 = fifo_rx.notFull;
-        //method dbg2 = !first_output_produced || fifo_tx.notEmpty;
+        method dbg1 = isValid(fifo_rx_wire.wget); // Sinal de debug para verificar se há um valor válido no FIFO
+        //method dbg2 = symbol_fifo_rx.notFull;
+        //method dbg2 = !is_first_output_produced || symbol_fifo_tx.notEmpty;
     endinterface
 
-    interface out = toGet(fifo_rx);
-    interface in = toPut(fifo_tx);
+    interface out = toGet(symbol_fifo_rx); // Interface de saída que consome do FIFO de recepção
+    interface in = toPut(symbol_fifo_tx); // Interface de entrada que enfileira no FIFO de transmissão
 endmodule
