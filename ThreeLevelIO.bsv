@@ -40,6 +40,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
     TriState#(Bit#(1)) txn_zbuf <- mkTriState(tx_en, txn_in);
 
     FIFOF#(Symbol) fifo_tx <- mkFIFOF;
+
     Reg#(Bool) first_output_produced <- mkReg(False);
     continuousAssert (!first_output_produced || fifo_tx.notEmpty, "E1 TX was not fed fast enough");
 
@@ -49,6 +50,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
         if (counter < counter_mid_value) begin
             level = Z;
         end
+
         case (level)
             N: begin
                 txp_in <= 0;
@@ -71,7 +73,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
             fifo_tx.deq;
             first_output_produced <= True;
         end
-        counter <= counter - 1;
+        counter <= (counter == 0) ? counter_reset_value : counter - 1;
     endrule
 
     Reg#(Bit#(3)) rxp_sync <- mkReg('b111);
@@ -82,7 +84,8 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
     continuousAssert(!isValid(fifo_rx_w.wget) || fifo_rx.notFull, "E1 RX was not consumed fast enough");
 
     rule fifo_rx_enq;
-        when (fifo_rx_w.wget matches tagged Valid .value) begin
+        if (isValid(fifo_rx_w.wget)) begin
+            let value = tagged Valid .value <- fifo_rx_w.wget;
             fifo_rx.enq(value);
         end
     endrule
@@ -93,13 +96,28 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
         method Action recv(Bit#(1) rxp_n, Bit#(1) rxn_n);
             rxp_sync <= {rxp_n, rxp_sync[2:1]};
             rxn_sync <= {rxn_n, rxn_sync[2:1]};
-            if (sync_to_line_clock && counter == 0) begin
-                let value = ({rxp_sync[1], rxn_sync[1]} == 2'b01) ? P : ({rxp_sync[1], rxn_sync[1]} == 2'b10) ? N : Z;
-                fifo_rx_w.put(value);
-                counter <= counter_reset_value;
-            end else begin
-                counter <= (counter == 0) ? counter_reset_value : counter - 1;
+
+            let sample_at_counter = sync_to_line_clock ? 0 : counter_max_value >> 2;
+            if (counter == sample_at_counter) begin
+                let value = case ({rxp_sync[1], rxn_sync[1]})
+                    2'b00: Z;
+                    2'b11: Z;
+                    2'b01: P;
+                    2'b10: N;
+                endcase;
+                fifo_rx_w <= value;
             end
+
+            if (sync_to_line_clock && (rxp_sync[1:0] == 'b01 || rxn_sync[1:0] == 'b01)) begin
+                // Adjust the counter_reset_value based on phase detection
+                if (counter < (counter_reset_value >> 2)) begin
+                    counter_reset_value <= counter_reset_value + 1;
+                end else if (counter > (counter_reset_value >> 2)) begin
+                    counter_reset_value <= counter_reset_value - 1;
+                end
+            end
+
+            counter <= (counter == 0) ? counter_reset_value : counter - 1;
         endmethod
 
         method Bool dbg1 = isValid(fifo_rx_w.wget);
