@@ -84,7 +84,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
 
     rule fifo_rx_enq;
         if (isValid(fifo_rx_w.wget)) begin
-            let value = tagged Valid.value <- fifo_rx_w.wget;
+            let value = fifo_rx_w.wget;
             fifo_rx.enq(value);
         end
     endrule
