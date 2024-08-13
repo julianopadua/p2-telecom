@@ -84,7 +84,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
 
     rule fifo_rx_enq;
         if (isValid(fifo_rx_w.wget)) begin
-            let value = fromMaybe(fifo_rx_w.wget);
+            let value = fromMaybe(fifo_rx_w.wget, Z);  // Use a default value of Z
             fifo_rx.enq(value);
         end
     endrule
@@ -104,7 +104,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
                     2'b01: P;
                     2'b10: N;
                 endcase;
-                fifo_rx_w.wset(Valid value);
+                fifo_rx_w <= valid(value);
             end
 
             counter <= (counter == 0) ? counter_reset_value : counter - 1;
