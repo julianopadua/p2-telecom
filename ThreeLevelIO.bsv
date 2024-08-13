@@ -40,43 +40,38 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
     TriState#(Bit#(1)) txn_zbuf <- mkTriState(tx_en, txn_in);
 
     FIFOF#(Symbol) fifo_tx <- mkFIFOF;
-
     Reg#(Bool) first_output_produced <- mkReg(False);
     continuousAssert (!first_output_produced || fifo_tx.notEmpty, "E1 TX was not fed fast enough");
 
     rule produce_output;
         let level = fifo_tx.first;
-
         let counter_mid_value = counter_max_value >> 1;
-        if (counter < counter_mid_value)  // Return-to-zero
+        if (counter < counter_mid_value) begin
             level = Z;
-
+        end
         case (level)
-            N:
-                action
-                    txp_in <= 0;
-                    txn_in <= 1;
-                    tx_en <= True;
-                endaction
-            Z:
-                action
-                    txp_in <= 0;
-                    txn_in <= 0;
-                    tx_en <= False;
-                endaction
-            P:
-                action
-                    txp_in <= 1;
-                    txn_in <= 0;
-                    tx_en <= True;
-                endaction
+            N: begin
+                txp_in <= 0;
+                txn_in <= 1;
+                tx_en <= True;
+            end
+            Z: begin
+                txp_in <= 0;
+                txn_in <= 0;
+                tx_en <= False;
+            end
+            P: begin
+                txp_in <= 1;
+                txn_in <= 0;
+                tx_en <= True;
+            end
         endcase
 
         if (counter == 0) begin
             fifo_tx.deq;
+            first_output_produced <= True;
         end
-
-        first_output_produced <= True;
+        counter <= counter - 1;
     endrule
 
     Reg#(Bit#(3)) rxp_sync <- mkReg('b111);
@@ -86,45 +81,28 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
 
     continuousAssert(!isValid(fifo_rx_w.wget) || fifo_rx.notFull, "E1 RX was not consumed fast enough");
 
-    rule fifo_rx_enq (fifo_rx_w.wget matches tagged Valid .value);
-        fifo_rx.enq(value);
+    rule fifo_rx_enq;
+        when (fifo_rx_w.wget matches tagged Valid .value) begin
+            fifo_rx.enq(value);
+        end
     endrule
 
     interface ThreeLevelIOPins pins;
         method txp = txp_zbuf.io;
         method txn = txn_zbuf.io;
-
         method Action recv(Bit#(1) rxp_n, Bit#(1) rxn_n);
             rxp_sync <= {rxp_n, rxp_sync[2:1]};
             rxn_sync <= {rxn_n, rxn_sync[2:1]};
-
-            let sample_at_counter = sync_to_line_clock ? 0 : 17;
-            if (counter == sample_at_counter) begin
-                let value = case ({rxp_sync[1], rxn_sync[1]})
-                    2'b00: Z;
-                    2'b11: Z;
-                    2'b01: P;
-                    2'b10: N;
-                endcase;
-                fifo_rx_w.put(value);  // Corrigido de 'set' para 'put'
-            end
-
-            counter <= counter == 0 ? counter_reset_value : counter - 1;
-
-            if (sync_to_line_clock && counter == counter_reset_value >> 2) begin
-                let positive_edge = rxp_sync[1:0] == 'b01 || rxn_sync[1:0] == 'b01;  // {current_bit, previous_bit}
-                if (positive_edge) begin
-                    // Ajusta o valor de counter_reset_value baseado na condição de borda detectada
-                    if (counter < counter_max_value / 4) begin
-                        counter_reset_value <= counter_reset_value + 1;
-                    end else if (counter > counter_max_value / 4) begin
-                        counter_reset_value <= counter_reset_value - 1;
-                    end
-                end
+            if (sync_to_line_clock && counter == 0) begin
+                let value = ({rxp_sync[1], rxn_sync[1]} == 2'b01) ? P : ({rxp_sync[1], rxn_sync[1]} == 2'b10) ? N : Z;
+                fifo_rx_w.put(value);
+                counter <= counter_reset_value;
+            end else begin
+                counter <= (counter == 0) ? counter_reset_value : counter - 1;
             end
         endmethod
 
-        method dbg1 = isValid(fifo_rx_w.wget);
+        method Bool dbg1 = isValid(fifo_rx_w.wget);
     endinterface
 
     interface out = toGet(fifo_rx);
