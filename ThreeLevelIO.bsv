@@ -1,3 +1,37 @@
+import TriState::*;
+import GetPut::*;
+import BUtils::*;
+import FIFOF::*;
+import Assert::*;
+
+typedef 32 CyclesPerSymbol;
+
+// Definindo LBit caso não esteja definido
+typedef Bit#(32) LBit#(numeric type n) = Bit#(n);
+
+// Definindo Symbol caso não esteja definido
+typedef enum { N, Z, P } Symbol deriving (Eq, Bits, FShow);
+
+interface ThreeLevelIOPins;
+    (* always_ready *)
+    method Inout#(Bit#(1)) txp;
+    (* always_ready *)
+    method Inout#(Bit#(1)) txn;
+    (* always_ready, always_enabled, prefix="" *)
+    method Action recv(Bit#(1) rxp_n, Bit#(1) rxn_n);
+
+    (* always_ready *)
+    method Bool dbg1;
+    //(* always_ready *)
+    //method Bool dbg2;
+endinterface
+
+interface ThreeLevelIO;
+    interface ThreeLevelIOPins pins;
+    interface Put#(Symbol) in;
+    interface Get#(Symbol) out;
+endinterface
+
 module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
     LBit#(CyclesPerSymbol) counter_max_value = fromInteger(valueOf(CyclesPerSymbol) - 1);
     Reg#(LBit#(CyclesPerSymbol)) counter_reset_value <- mkReg(counter_max_value);
