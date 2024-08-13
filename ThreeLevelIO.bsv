@@ -106,7 +106,7 @@ module mkThreeLevelIO#(Bool sync_to_line_clock)(ThreeLevelIO);
                     2'b01: P;
                     2'b10: N;
                 endcase;
-                fifo_rx_w.set(value);
+                fifo_rx_w.put(value);  // Corrigido de 'set' para 'put'
             end
 
             counter <= counter == 0 ? counter_reset_value : counter - 1;
